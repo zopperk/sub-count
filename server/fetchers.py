@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 import httpx
-import instaloader
 
 
 @dataclass
@@ -23,20 +22,39 @@ def _format_count(value: int) -> str:
 
 
 def fetch_instagram(username: str) -> CountResult:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+        "X-IG-App-ID": "936619743392459",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+
     try:
-        loader = instaloader.Instaloader(
-            download_pictures=False,
-            download_videos=False,
-            download_video_thumbnails=False,
-            download_geotags=False,
-            download_comments=False,
-            save_metadata=False,
-            compress_json=False,
-        )
-        profile = instaloader.Profile.from_username(loader.context, username)
-        return CountResult("instagram", username, profile.followers)
-    except instaloader.exceptions.ProfileNotExistsException:
-        return CountResult("instagram", username, None, "Profile not found")
+        with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+            response = client.get(
+                "https://www.instagram.com/api/v1/users/web_profile_info/",
+                params={"username": username},
+                headers=headers,
+            )
+
+        if response.status_code == 404:
+            return CountResult("instagram", username, None, "Profile not found")
+
+        response.raise_for_status()
+        data = response.json()
+        user = data.get("data", {}).get("user")
+        if not user:
+            return CountResult("instagram", username, None, "Profile not found")
+
+        followers = user.get("edge_followed_by", {}).get("count")
+        if followers is None:
+            return CountResult("instagram", username, None, "Could not parse follower count")
+
+        return CountResult("instagram", username, int(followers))
     except Exception as exc:  # noqa: BLE001
         return CountResult("instagram", username, None, str(exc))
 
