@@ -1,4 +1,5 @@
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -21,6 +22,26 @@ def _format_count(value: int) -> str:
     return f"{value:,}"
 
 
+def _parse_instagram_profile_response(response: httpx.Response, username: str) -> CountResult:
+    if response.status_code == 404:
+        return CountResult("instagram", username, None, "Profile not found")
+
+    if response.status_code == 429:
+        return CountResult("instagram", username, None, "Rate limited by Instagram")
+
+    response.raise_for_status()
+    data = response.json()
+    user = data.get("data", {}).get("user")
+    if not user:
+        return CountResult("instagram", username, None, "Profile not found")
+
+    followers = user.get("edge_followed_by", {}).get("count")
+    if followers is None:
+        return CountResult("instagram", username, None, "Could not parse follower count")
+
+    return CountResult("instagram", username, int(followers))
+
+
 def fetch_instagram(username: str) -> CountResult:
     headers = {
         "User-Agent": (
@@ -32,29 +53,34 @@ def fetch_instagram(username: str) -> CountResult:
         "X-IG-App-ID": "936619743392459",
         "X-Requested-With": "XMLHttpRequest",
     }
+    endpoints = [
+        "https://www.instagram.com/api/v1/users/web_profile_info/",
+        "https://i.instagram.com/api/v1/users/web_profile_info/",
+    ]
+
+    last_error = "Could not fetch Instagram profile"
 
     try:
         with httpx.Client(timeout=15.0, follow_redirects=True) as client:
-            response = client.get(
-                "https://www.instagram.com/api/v1/users/web_profile_info/",
-                params={"username": username},
-                headers=headers,
-            )
+            for attempt in range(3):
+                for endpoint in endpoints:
+                    response = client.get(
+                        endpoint,
+                        params={"username": username},
+                        headers=headers,
+                    )
+                    result = _parse_instagram_profile_response(response, username)
 
-        if response.status_code == 404:
-            return CountResult("instagram", username, None, "Profile not found")
+                    if result.followers is not None:
+                        return result
 
-        response.raise_for_status()
-        data = response.json()
-        user = data.get("data", {}).get("user")
-        if not user:
-            return CountResult("instagram", username, None, "Profile not found")
+                    if result.error:
+                        last_error = result.error
 
-        followers = user.get("edge_followed_by", {}).get("count")
-        if followers is None:
-            return CountResult("instagram", username, None, "Could not parse follower count")
+                    if response.status_code == 429:
+                        time.sleep(2 ** attempt)
 
-        return CountResult("instagram", username, int(followers))
+        return CountResult("instagram", username, None, last_error)
     except Exception as exc:  # noqa: BLE001
         return CountResult("instagram", username, None, str(exc))
 

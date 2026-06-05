@@ -12,7 +12,7 @@ load_dotenv()
 
 TIKTOK_USERNAME = os.getenv("TIKTOK_USERNAME", "")
 INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME", "")
-CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "300"))
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "900"))
 
 _cache: Optional[Dict[str, Any]] = None
 _cache_time: float = 0.0
@@ -20,6 +20,34 @@ _cache_time: float = 0.0
 
 def _is_stale() -> bool:
     return _cache is None or (time.time() - _cache_time) > CACHE_TTL_SECONDS
+
+
+def _merge_with_stale_cache(results: list) -> list:
+    if not _cache:
+        return [result_to_dict(r) for r in results]
+
+    previous = {p["platform"]: p for p in _cache.get("platforms", [])}
+    merged = []
+
+    for result in results:
+        fresh = result_to_dict(result)
+        if fresh["followers"] is None and result.platform in previous:
+            stale = previous[result.platform]
+            if stale.get("followers") is not None:
+                merged.append(
+                    {
+                        "platform": stale["platform"],
+                        "username": stale["username"],
+                        "followers": stale["followers"],
+                        "display": stale["display"],
+                        "stale": True,
+                    }
+                )
+                continue
+
+        merged.append(fresh)
+
+    return merged
 
 
 def _refresh_counts() -> Dict[str, Any]:
@@ -30,11 +58,12 @@ def _refresh_counts() -> Dict[str, Any]:
     if TIKTOK_USERNAME:
         results.append(fetch_tiktok(TIKTOK_USERNAME))
     if INSTAGRAM_USERNAME:
+        time.sleep(1)
         results.append(fetch_instagram(INSTAGRAM_USERNAME))
 
     _cache = {
         "updated_at": int(time.time()),
-        "platforms": [result_to_dict(r) for r in results],
+        "platforms": _merge_with_stale_cache(results),
     }
     _cache_time = time.time()
     return _cache
