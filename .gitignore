@@ -1,0 +1,6 @@
+server/venv/
+server/.env
+esp32/sub_count_display/secrets.h
+__pycache__/
+*.pyc
+.DS_Store
